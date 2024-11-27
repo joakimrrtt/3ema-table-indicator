@@ -1,0 +1,93 @@
+//@version=5
+indicator("EMA Table (9, 13, 21) + 1H 9/13/21 EMA with 9 EMA Touch Detection", overlay=true)
+
+// Define the lengths for the EMAs and the 1-hour equivalent EMAs
+emaLength1 = 9
+emaLength2 = 13
+emaLength3 = 21
+emaLength9_1h = 9
+emaLength13_1h = 13
+emaLength21_1h = 21
+
+// Get the EMAs on the 5-minute chart
+ema9 = ta.ema(close, emaLength1)
+ema13 = ta.ema(close, emaLength2)
+ema21 = ta.ema(close, emaLength3)
+
+// Request the 9, 13, and 21 EMA from the 1-hour timeframe using request.security
+ema9_1h = request.security(syminfo.tickerid, "60", ta.ema(close, emaLength9_1h), lookahead=barmerge.lookahead_on)
+ema13_1h  = request.security(syminfo.tickerid, "60", ta.ema(close, emaLength13_1h), lookahead=barmerge.lookahead_on)
+ema21_1h = request.security(syminfo.tickerid, "60", ta.ema(close, emaLength21_1h), lookahead=barmerge.lookahead_on)
+
+// Function to check if the current candle touched the 9 EMA
+is_touching_ema(float ema) =>
+    (high >= ema and low <= ema)
+
+// Determine if the current candle touches the 9 EMA
+touching_ema9 = is_touching_ema(ema9)
+
+// Use barssince to find how many bars since the last touch of the 9 EMA
+bars_since_touching_ema9 = ta.barssince(touching_ema9)
+
+// Detect if the EMAs have crossed each other in the last 5 candles using crossunder
+cross_ema9_ema13 = ta.barssince(ta.cross(ema9, ema13)) < 5
+cross_ema9_ema21 = ta.barssince(ta.cross(ema9, ema21)) < 5
+cross_ema13_ema21 = ta.barssince(ta.cross(ema13, ema21)) < 5
+cross_all_emas = cross_ema9_ema13 or cross_ema9_ema21 or cross_ema13_ema21
+
+// Determine trend status
+all_above = close > ema9 and close > ema13 and close > ema21 and close > ema9_1h and close > ema13_1h and close > ema21_1h
+all_below = close < ema9 and close < ema13 and close < ema21 and close < ema9_1h and close < ema13_1h and close < ema21_1h
+is_trending = all_above or all_below
+
+// Check if EMAs are at least a certain percentage apart
+percent_difference = 0.005 / 100  // 0.005% threshold
+is_percentage_apart_up = (ema9 - ema13 > ema13 * percent_difference) and (ema13 - ema21 > ema21 * percent_difference)
+is_percentage_apart_down = (ema13 - ema9 > ema9 * percent_difference) and (ema21 - ema13 > ema13 * percent_difference)
+
+// Check if the 9, 13, and 21 EMAs are in correct order for an uptrend or downtrend on both timeframes
+correct_order_up = (ema9 > ema13 and ema13 > ema21) and (ema9_1h > ema13_1h and ema13_1h > ema21_1h)
+correct_order_down = (ema9 < ema13 and ema13 < ema21) and (ema9_1h < ema13_1h and ema13_1h < ema21_1h)
+correct_order = correct_order_up or correct_order_down
+
+// Check if the price is overextended by more than the percentage threshold relative to the 9 EMA
+pip_threshold = 0.01 / 100  // 0.01% threshold for overextension
+distance_from_ema9 = math.abs(close - ema9)
+overextended = distance_from_ema9 > pip_threshold
+
+// Create the table for displaying information
+var table emaTable = table.new(position.bottom_right, 9, 8, border_width=1)
+
+// Update the table to show if EMAs are in the correct order and at least the given percentage apart
+table.cell(emaTable, 1, 1, text=is_trending ? "Graph over/under EMA's" : "Graph between EMA's", bgcolor=is_trending ? color.green : color.red)
+table.cell(emaTable, 1, 3, text=cross_all_emas ? "EMA Crossed" : "EMA Not Crossed", bgcolor=cross_all_emas ? color.red : color.green)
+table.cell(emaTable, 1, 2, text=correct_order_up ? "EMA order: Uptrend" : (correct_order_down ? "EMA order: Downtrend" : "Wrong Order"), bgcolor=correct_order ? color.green : color.red)
+table.cell(emaTable, 1, 4, text=(is_percentage_apart_up or is_percentage_apart_down) ? "At least 0.005% Apart" : "Less than 0.005%", bgcolor=(is_percentage_apart_up or is_percentage_apart_down) ? color.green : color.red)
+table.cell(emaTable, 1, 5, text="Last Touched EMA: " + str.tostring(bars_since_touching_ema9), bgcolor=(bars_since_touching_ema9 < 5) ? color.red : color.green)
+
+// Check if all previous table cells are green
+all_green = is_trending and not cross_all_emas and correct_order and (is_percentage_apart_up or is_percentage_apart_down) and (bars_since_touching_ema9 >= 5)
+
+// Add a new cell to indicate if all conditions are met
+table.cell(emaTable, 1, 6, text=all_green ? "All Conditions Met" : "Conditions Not Met", bgcolor=all_green ? color.green : color.red)
+
+// Add alertcondition for when all conditions are met
+alertcondition(all_green, title="BUY", message="SYMBOL: {{ticker}} : PRICE: {{close}}")
+
+// Highlight the background of the chart when all conditions are met
+bgcolor(all_green ? color.new(color.green, 90) : na)
+
+// Plot the EMAs on the chart with different colors
+plot(ema9, title="EMA 9", color=color.red, linewidth=1)
+plot(ema13, title="EMA 13", color=color.blue, linewidth=1)
+plot(ema21, title="EMA 21", color=color.green, linewidth=1)
+
+// Detect and label the first candle that touches the 9 EMA after all conditions were met
+var bool was_all_green = false
+if (all_green)
+    was_all_green := true
+else if (was_all_green and touching_ema9)
+    label.new(bar_index, low , "BUY", color=color.green, textcolor=color.white, size=size.normal)
+    alert("SYMBOL: {{ticker}} : PRICE: {{close}}", alert.freq_once_per_bar_close)  // Add an alert when the label is placed
+    was_all_green := false
+ 
